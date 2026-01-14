@@ -1,70 +1,56 @@
-/* Flag Royale (Fixed Physics) - Matter.js
-   ✅ Solid ring drawn with a clear mouth gap (10% random each round)
-   ✅ Invisible ring colliders for physics
-   ✅ Flags bounce/reflect strongly and NEVER stop moving after Start
-   ✅ Escaped flags are "eliminated" from the competition but stay on screen
-      and slide/fall to bottom (without global gravity)
-   ✅ Screen edges are walls (nothing leaves the screen)
-   ✅ PC toggle: Vertical / Horizontal stage
-   ✅ Top-5 wins scoreboard (session-only, resets on reload)
-   ✅ Random mouth + random spawn each round
-   ✅ Start gives immediate random velocity to all flags
-   ✅ Auto next round option and countdown overlay
-*/
+/* Flag Royale - TikTok Vertical First (Fast, Endless Rounds) */
 
-const {
-  Engine, Render, Runner, World, Bodies, Body, Events, Vector
-} = Matter;
+const { Engine, Render, Runner, World, Bodies, Body, Events } = Matter;
 
-/* ---------- DOM ---------- */
+/* ---------------- DOM ---------------- */
 const canvas = document.getElementById("world");
-const stage = document.getElementById("stage");
 
 const remainingEl = document.getElementById("remaining");
 const eliminatedEl = document.getElementById("eliminated");
 const roundEl = document.getElementById("round");
 const top5El = document.getElementById("top5");
 
+const startOverlay = document.getElementById("startOverlay");
+const btnStartBig = document.getElementById("btnStartBig");
+
 const winnerOverlay = document.getElementById("winner");
 const winnerText = document.getElementById("winnerText");
-const winnerSub = document.getElementById("winnerSub");
+const winnerFlag = document.getElementById("winnerFlag");
 
-const btnStart = document.getElementById("btnStart");
-const btnReset = document.getElementById("btnReset");
-const btnNextRound = document.getElementById("btnNextRound");
-const btnPlayAgain = document.getElementById("btnPlayAgain");
-const autoNext = document.getElementById("autoNext");
-const btnOrientation = document.getElementById("btnOrientation");
+/* ---------------- CONFIG (fast game) ---------------- */
+const FLAG_RADIUS = 15;
+const FLAG_SPRITE_W = 34;     // display size
+const FLAG_SPRITE_H = 26;
 
-/* ---------- CONFIG ---------- */
-const FLAG_RADIUS = 16;
-const FLAG_SPRITE_SIZE = 34;
-
+const RING_SEGMENTS = 96;
 const WALL_THICKNESS = 18;
-const RING_SEGMENTS = 92;
 
-const MOUTH_FRACTION = 0.10;      // 10% gap
-const ROTATION_SPEED = 0.010;     // rad/tick
+const MOUTH_FRACTION = 0.10;  // 10% gap
 
-const OUT_MARGIN = 26;            // when outside ring => eliminated
-const START_VEL_MIN = 3.2;        // initial velocity range
-const START_VEL_MAX = 6.2;
+// Faster ring + stronger kick so game ends quickly
+const ROTATION_SPEED = 0.018;
+const OUT_MARGIN = 24;
 
-const COLLISION_THRESHOLD = 1.8;  // sound trigger threshold
-const SOUND_COOLDOWN_MS = 55;
+// Motion tuning (never stop + faster)
+const START_SPEED_MIN = 6.5;
+const START_SPEED_MAX = 10.0;
 
-/* “Never stop moving” tuning */
-const MIN_SPEED = 2.2;
-const MAX_SPEED = 11.0;
+const MIN_SPEED = 5.2;        // aggressive keep-alive
+const MAX_SPEED = 18.0;
 
-/* Extra energy injection near ring boundary */
-const RING_KICK_BAND = 28;
-const RING_KICK_FORCE = 0.00035;
+const RING_KICK_BAND = 38;
+const RING_KICK_FORCE = 0.00085;  // stronger so they speed up on ring hits
 
-/* Out flags falling/settling */
-const OUT_FALL_FORCE = 0.0018;
+// eliminated pit behavior
+const OUT_FALL_FORCE = 0.0020;
+const PIT_KEEP_Y_FRAC = 0.90;  // bottom 10% is pit; anything below stays, anything above can be pushed down
+const PIT_PUSH_DOWN_FORCE = 0.0009;
 
-/* ---------- FLAGS (193 UN members) ---------- */
+// sound
+const COLLISION_THRESHOLD = 2.2;
+const SOUND_COOLDOWN_MS = 45;
+
+/* ---------------- FLAGS (193 UN members) ---------------- */
 const COUNTRIES = [
   { name: "Afghanistan", code: "af" },{ name: "Albania", code: "al" },{ name: "Algeria", code: "dz" },{ name: "Andorra", code: "ad" },
   { name: "Angola", code: "ao" },{ name: "Antigua and Barbuda", code: "ag" },{ name: "Argentina", code: "ar" },{ name: "Armenia", code: "am" },
@@ -118,19 +104,18 @@ const COUNTRIES = [
   { name: "Zambia", code: "zm" },{ name: "Zimbabwe", code: "zw" }
 ];
 
-/* ---------- URL helper ---------- */
-function flagUrl(code) {
-  return `https://flagcdn.com/w80/${code}.png`;
-}
+function flagUrl(code){ return `https://flagcdn.com/w80/${code}.png`; }
 
-/* ---------- Audio (no files) ---------- */
+/* ---------------- AUDIO ---------------- */
 let audioCtx = null;
 let lastSoundAt = 0;
-function ensureAudio() {
+
+function ensureAudio(){
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
-function playClink(intensity = 0.5) {
+
+function playClink(intensity = 0.6){
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
 
@@ -138,157 +123,121 @@ function playClink(intensity = 0.5) {
   const gain = audioCtx.createGain();
 
   osc.type = "triangle";
-  const base = 350 + Math.random() * 350;
+  const base = 420 + Math.random() * 420;
   osc.frequency.setValueAtTime(base, now);
-  osc.frequency.exponentialRampToValueAtTime(base * 1.8, now + 0.02);
+  osc.frequency.exponentialRampToValueAtTime(base * 1.9, now + 0.02);
 
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(Math.min(0.25, 0.03 + intensity * 0.20), now + 0.005);
+  gain.gain.exponentialRampToValueAtTime(Math.min(0.28, 0.04 + intensity * 0.22), now + 0.005);
   gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.07);
 
   osc.connect(gain);
   gain.connect(audioCtx.destination);
-
   osc.start(now);
-  osc.stop(now + 0.08);
+  osc.stop(now + 0.085);
 }
 
-/* ---------- World state ---------- */
-let engine, runner, render;
+/* ---------------- WORLD STATE ---------------- */
+let engine, render, runner;
+
 let W = 0, H = 0, dpr = 1;
-
-let ringCenter = { x: 0, y: 0 };
+let ringCenter = {x:0,y:0};
 let ringRadius = 0;
-let ringAngle = 0;
 
+let ringAngle = 0;
 let mouthCenterAngle = 0;
 let mouthHalfAngle = 0;
 
 let ringSegments = [];
 let walls = [];
 
-let allFlags = [];
-let activeFlags = [];
+let allFlags = [];     // all bodies
+let activeFlags = [];  // still competing
 
 let eliminatedCount = 0;
 let roundNumber = 1;
-let started = false;
+let running = false;   // after first Start, runs forever
 
-let nextRoundTimer = null;
-const wins = {}; // session-only
+const wins = {};       // session wins
 
-/* ---------- UI ---------- */
-function setCounts() {
-  remainingEl.textContent = String(activeFlags.length);
-  eliminatedEl.textContent = String(eliminatedCount);
-  roundEl.textContent = String(roundNumber);
-}
-function renderTop5() {
-  const entries = Object.entries(wins).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  top5El.innerHTML = "";
-  if (entries.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "No wins yet";
-    top5El.appendChild(li);
-    return;
-  }
-  for (const [name, score] of entries) {
-    const li = document.createElement("li");
-    li.textContent = `${name} — ${score}`;
-    top5El.appendChild(li);
-  }
-}
-function showWinner(name) {
-  winnerText.textContent = `${name} wins!`;
-  winnerOverlay.classList.remove("hidden");
-}
-function hideWinner() {
-  winnerOverlay.classList.add("hidden");
-}
-
-/* ---------- Sizing ---------- */
-function getCanvasTargetRect() {
-  return canvas.getBoundingClientRect();
-}
-function resize() {
+/* ---------------- LAYOUT / RESIZE ---------------- */
+function resize(){
   dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-  const rect = getCanvasTargetRect();
-
+  const rect = canvas.getBoundingClientRect();
   W = Math.max(1, Math.floor(rect.width * dpr));
   H = Math.max(1, Math.floor(rect.height * dpr));
-
   canvas.width = W;
   canvas.height = H;
 
-  if (render) {
+  if (render){
     render.options.width = W;
     render.options.height = H;
     render.canvas.width = W;
     render.canvas.height = H;
   }
 
-  // ring slightly above center, so escaped flags pile at bottom area
-  ringCenter = { x: W / 2, y: H * 0.42 };
+  // vertical priority:
+  // top 10% = HUD, middle 50% = ring, bottom 10% = pit
+  // Place ring center around mid-upper area to leave pit at bottom
+  ringCenter = { x: W/2, y: H * 0.42 };
   ringRadius = Math.min(W, H) * 0.34;
 }
 
-/* ---------- Helpers ---------- */
-function clearBodies(list) {
+/* ---------------- HELPERS ---------------- */
+function clearBodies(list){
   for (const b of list) World.remove(engine.world, b);
   list.length = 0;
 }
-function angleDiff(a, b) {
+function angleDiff(a,b){
   let d = a - b;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
+  while (d > Math.PI) d -= Math.PI*2;
+  while (d < -Math.PI) d += Math.PI*2;
   return d;
 }
-function randomInsideCircle(maxR) {
+function randomInsideCircle(maxR){
   const t = Math.random() * Math.PI * 2;
   const u = Math.random() + Math.random();
   const rr = (u > 1 ? 2 - u : u) * maxR;
-  return { x: ringCenter.x + Math.cos(t) * rr, y: ringCenter.y + Math.sin(t) * rr };
+  return { x: ringCenter.x + Math.cos(t)*rr, y: ringCenter.y + Math.sin(t)*rr };
 }
 
-/* ---------- Screen walls (keep everything on screen) ---------- */
-function buildScreenWalls() {
+/* ---------------- WALLS ---------------- */
+function buildScreenWalls(){
   clearBodies(walls);
-  const t = 40;
-  const opts = { isStatic: true, render: { visible: false } };
+  const t = 44;
+  const opts = { isStatic: true, render: { visible:false } };
   const top = Bodies.rectangle(W/2, -t/2, W+2*t, t, opts);
-  const bottom = Bodies.rectangle(W/2, H + t/2, W+2*t, t, opts);
+  const bottom = Bodies.rectangle(W/2, H+t/2, W+2*t, t, opts);
   const left = Bodies.rectangle(-t/2, H/2, t, H+2*t, opts);
-  const right = Bodies.rectangle(W + t/2, H/2, t, H+2*t, opts);
-  walls.push(top, bottom, left, right);
+  const right = Bodies.rectangle(W+t/2, H/2, t, H+2*t, opts);
+  walls.push(top,bottom,left,right);
   World.add(engine.world, walls);
 }
 
-/* ---------- Ring with mouth gap (physics segments invisible) ---------- */
-function buildRingWithMouth() {
+/* ---------------- RING WITH GAP ---------------- */
+function buildRingWithMouth(){
   clearBodies(ringSegments);
 
-  mouthHalfAngle = (Math.PI * 2) * (MOUTH_FRACTION / 2);
-  mouthCenterAngle = Math.random() * Math.PI * 2;
+  mouthHalfAngle = (Math.PI*2) * (MOUTH_FRACTION/2);
+  mouthCenterAngle = Math.random() * Math.PI*2;
 
   const segCount = RING_SEGMENTS;
   const r = ringRadius;
   const thickness = WALL_THICKNESS;
 
-  for (let i = 0; i < segCount; i++) {
-    const a = (i / segCount) * Math.PI * 2;
-
-    // skip the mouth opening
+  for (let i=0;i<segCount;i++){
+    const a = (i/segCount) * Math.PI*2;
     if (Math.abs(angleDiff(a, mouthCenterAngle)) < mouthHalfAngle) continue;
 
-    const x = ringCenter.x + Math.cos(a) * r;
-    const y = ringCenter.y + Math.sin(a) * r;
-    const segLen = (2 * Math.PI * r) / segCount + 2;
+    const x = ringCenter.x + Math.cos(a)*r;
+    const y = ringCenter.y + Math.sin(a)*r;
+    const segLen = (2*Math.PI*r)/segCount + 2;
 
-    const wall = Bodies.rectangle(x, y, segLen, thickness, {
-      isStatic: true,
-      angle: a,
-      label: "ring",
-      render: { visible: false } // IMPORTANT: ring is drawn manually
+    const wall = Bodies.rectangle(x,y, segLen, thickness, {
+      isStatic:true,
+      angle:a,
+      label:"ring",
+      render:{ visible:false }
     });
 
     wall._baseAngle = a;
@@ -298,62 +247,66 @@ function buildRingWithMouth() {
   World.add(engine.world, ringSegments);
 }
 
-function updateRingRotation() {
+function updateRingRotation(){
   ringAngle += ROTATION_SPEED;
   const r = ringRadius;
 
-  for (const wall of ringSegments) {
+  for (const wall of ringSegments){
     const a = wall._baseAngle + ringAngle;
-    const x = ringCenter.x + Math.cos(a) * r;
-    const y = ringCenter.y + Math.sin(a) * r;
-    Body.setPosition(wall, { x, y });
+    Body.setPosition(wall, {
+      x: ringCenter.x + Math.cos(a)*r,
+      y: ringCenter.y + Math.sin(a)*r
+    });
     Body.setAngle(wall, a);
   }
 }
 
-/* ---------- Spawn flags ---------- */
-function spawnFlags() {
-  // remove old
+/* ---------------- FLAGS ---------------- */
+function spawnFlags(){
+  // remove old flags
   for (const f of allFlags) World.remove(engine.world, f);
   allFlags = [];
   activeFlags = [];
   eliminatedCount = 0;
 
-  const maxSpawnR = ringRadius - 85;
+  const maxSpawnR = ringRadius - 90;
 
-  for (const c of COUNTRIES) {
+  for (const c of COUNTRIES){
     let pos = null;
 
-    for (let tries = 0; tries < 120; tries++) {
+    for (let tries=0;tries<150;tries++){
       const p = randomInsideCircle(maxSpawnR);
 
-      // avoid spawning right near the mouth direction
+      // avoid mouth direction
       const ang = Math.atan2(p.y - ringCenter.y, p.x - ringCenter.x);
-      if (Math.abs(angleDiff(ang, mouthCenterAngle)) < mouthHalfAngle * 1.7) continue;
+      if (Math.abs(angleDiff(ang, mouthCenterAngle)) < mouthHalfAngle*1.7) continue;
 
       // avoid overlaps
-      const ok = activeFlags.every(b => Math.hypot(b.position.x - p.x, b.position.y - p.y) > FLAG_RADIUS * 2.0);
-      if (ok) { pos = p; break; }
+      const ok = activeFlags.every(b => Math.hypot(b.position.x - p.x, b.position.y - p.y) > FLAG_RADIUS*2.0);
+      if (ok){ pos=p; break; }
     }
     if (!pos) pos = randomInsideCircle(maxSpawnR);
 
+    // VERY bouncy, no drag, no friction = fast reflections
     const body = Bodies.circle(pos.x, pos.y, FLAG_RADIUS, {
-      restitution: 1.02,      // slightly >1 to compensate tiny losses
+      restitution: 1.04,      // slightly > 1 keeps energy alive
       friction: 0,
       frictionStatic: 0,
-      frictionAir: 0,         // NO DRAG
+      frictionAir: 0,
       slop: 0,
       label: "flag",
       render: {
         sprite: {
           texture: flagUrl(c.code),
-          xScale: FLAG_SPRITE_SIZE / 80,
-          yScale: FLAG_SPRITE_SIZE / 80
+          // keep flags more rectangle-like by scaling differently
+          xScale: (FLAG_SPRITE_W / 80),
+          yScale: (FLAG_SPRITE_H / 80)
         }
       }
     });
 
     body._countryName = c.name;
+    body._countryCode = c.code;
     body._eliminated = false;
 
     allFlags.push(body);
@@ -364,60 +317,59 @@ function spawnFlags() {
   setCounts();
 }
 
-/* ---------- Start motion (instant chaos) ---------- */
-function startVelocities() {
-  for (const b of activeFlags) {
-    const a = Math.random() * Math.PI * 2;
-    const s = START_VEL_MIN + Math.random() * (START_VEL_MAX - START_VEL_MIN);
-    Body.setVelocity(b, { x: Math.cos(a) * s, y: Math.sin(a) * s });
-    Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.25);
+function startVelocities(){
+  for (const b of activeFlags){
+    const a = Math.random() * Math.PI*2;
+    const s = START_SPEED_MIN + Math.random()*(START_SPEED_MAX-START_SPEED_MIN);
+    Body.setVelocity(b, { x: Math.cos(a)*s, y: Math.sin(a)*s });
+    Body.setAngularVelocity(b, (Math.random()-0.5)*0.22);
   }
 }
 
-/* ---------- Keep flags moving forever (main fix) ---------- */
-function keepFlagsMoving() {
-  for (const b of activeFlags) {
+/* Keep alive + speed up */
+function keepFlagsMoving(){
+  for (const b of activeFlags){
     const v = b.velocity;
     const speed = Math.hypot(v.x, v.y);
 
-    if (speed < MIN_SPEED) {
-      const a = Math.random() * Math.PI * 2;
-      Body.setVelocity(b, { x: Math.cos(a) * MIN_SPEED, y: Math.sin(a) * MIN_SPEED });
-    } else if (speed > MAX_SPEED) {
+    if (speed < MIN_SPEED){
+      const a = Math.random() * Math.PI*2;
+      Body.setVelocity(b, { x: Math.cos(a)*MIN_SPEED, y: Math.sin(a)*MIN_SPEED });
+    } else if (speed > MAX_SPEED){
       const scale = MAX_SPEED / speed;
-      Body.setVelocity(b, { x: v.x * scale, y: v.y * scale });
+      Body.setVelocity(b, { x: v.x*scale, y: v.y*scale });
     }
   }
 }
 
-/* Inject extra energy near ring boundary */
-function ringKick() {
-  for (const b of activeFlags) {
+/* Ring kick makes them gain speed when interacting with circle */
+function ringKick(){
+  for (const b of activeFlags){
     const dx = b.position.x - ringCenter.x;
     const dy = b.position.y - ringCenter.y;
-    const d = Math.hypot(dx, dy) || 1;
+    const d = Math.hypot(dx,dy) || 1;
 
-    if (Math.abs(d - ringRadius) < RING_KICK_BAND) {
+    if (Math.abs(d - ringRadius) < RING_KICK_BAND){
+      // tangential push (like rotating boundary)
       const tx = -dy / d;
       const ty = dx / d;
-      Body.applyForce(b, b.position, { x: tx * RING_KICK_FORCE, y: ty * RING_KICK_FORCE });
+      Body.applyForce(b, b.position, { x: tx*RING_KICK_FORCE, y: ty*RING_KICK_FORCE });
     }
   }
 }
 
-/* ---------- Elimination (out of ring) ---------- */
-function checkEliminations() {
+/* Elimination: out of ring => removed from competition but stays on screen */
+function checkEliminations(){
   const limit = ringRadius + OUT_MARGIN;
 
-  for (const b of activeFlags) {
+  for (const b of activeFlags){
     const p = b.position;
     const d = Math.hypot(p.x - ringCenter.x, p.y - ringCenter.y);
-
-    if (d > limit) {
+    if (d > limit){
       b._eliminated = true;
       b.label = "out";
 
-      // settle out flags
+      // settle in pit (less bounce)
       b.restitution = 0.08;
       b.friction = 0.20;
       b.frictionAir = 0.03;
@@ -427,50 +379,109 @@ function checkEliminations() {
   }
 
   const survivors = activeFlags.filter(b => !b._eliminated);
-  if (survivors.length !== activeFlags.length) {
+  if (survivors.length !== activeFlags.length){
     activeFlags = survivors;
     setCounts();
   }
 
-  if (started && activeFlags.length === 1) {
-    const winner = activeFlags[0]._countryName;
-    wins[winner] = (wins[winner] || 0) + 1;
-    renderTop5();
-
-    started = false;
-    showWinner(winner);
-
-    if (autoNext.checked) scheduleNextRound();
+  if (running && activeFlags.length === 1){
+    endRound(activeFlags[0]);
   }
 }
 
-/* ---------- Out flags fall/collect at bottom (no global gravity) ---------- */
-function applyOutFlagFall() {
-  for (const b of allFlags) {
-    if (b._eliminated) {
-      Body.applyForce(b, b.position, { x: 0, y: OUT_FALL_FORCE });
-      Body.setVelocity(b, { x: b.velocity.x * 0.995, y: b.velocity.y });
+/* Make eliminated flags fall and keep them mostly in bottom 10% area.
+   If too many, it's OK if some go out of view (we push them down and let them stack). */
+function applyOutPit(){
+  const pitTopY = H * PIT_KEEP_Y_FRAC;
+
+  for (const b of allFlags){
+    if (!b._eliminated) continue;
+
+    // constant down pull
+    Body.applyForce(b, b.position, { x: 0, y: OUT_FALL_FORCE });
+
+    // if an eliminated flag drifts above pit area, push it down harder
+    if (b.position.y < pitTopY){
+      Body.applyForce(b, b.position, { x: 0, y: PIT_PUSH_DOWN_FORCE });
     }
+
+    // slight damping sideways to make pile compact
+    Body.setVelocity(b, { x: b.velocity.x * 0.992, y: b.velocity.y });
   }
 }
 
-/* ---------- Collision sound ---------- */
-function setupCollisionSound() {
+/* ---------------- ROUND FLOW ---------------- */
+function endRound(winnerBody){
+  running = false;
+
+  const name = winnerBody._countryName;
+  const code = winnerBody._countryCode;
+
+  wins[name] = (wins[name] || 0) + 1;
+  renderTop5();
+
+  // winner overlay: show flag + name for 3 sec
+  winnerText.textContent = `${name} wins!`;
+  winnerFlag.src = flagUrl(code);
+  winnerOverlay.classList.remove("hidden");
+
+  setTimeout(() => {
+    winnerOverlay.classList.add("hidden");
+    nextRound();
+  }, 3000);
+}
+
+function nextRound(){
+  roundNumber += 1;
+  ringAngle = 0;
+
+  buildRingWithMouth();
+  spawnFlags();
+  startVelocities();
+
+  running = true;
+  setCounts();
+}
+
+/* ---------------- UI ---------------- */
+function setCounts(){
+  remainingEl.textContent = String(activeFlags.length);
+  eliminatedEl.textContent = String(eliminatedCount);
+  roundEl.textContent = String(roundNumber);
+}
+
+function renderTop5(){
+  const entries = Object.entries(wins).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  top5El.innerHTML = "";
+  if (entries.length === 0){
+    const li = document.createElement("li");
+    li.textContent = "No wins yet";
+    top5El.appendChild(li);
+    return;
+  }
+  for (const [name, score] of entries){
+    const li = document.createElement("li");
+    li.textContent = `${name} — ${score}`;
+    top5El.appendChild(li);
+  }
+}
+
+/* ---------------- COLLISION SOUND ---------------- */
+function setupCollisionSound(){
   Events.on(engine, "collisionStart", (evt) => {
-    if (!started || !audioCtx) return;
+    if (!running || !audioCtx) return;
 
     const nowMs = performance.now();
     if (nowMs - lastSoundAt < SOUND_COOLDOWN_MS) return;
 
-    for (const pair of evt.pairs) {
+    for (const pair of evt.pairs){
       const a = pair.bodyA;
       const b = pair.bodyB;
-
-      if (a.label === "flag" && b.label === "flag") {
+      if (a.label === "flag" && b.label === "flag"){
         const speed = (a.speed + b.speed) * 0.5;
-        if (speed >= COLLISION_THRESHOLD) {
+        if (speed >= COLLISION_THRESHOLD){
           lastSoundAt = nowMs;
-          playClink(Math.min(1, speed / 10));
+          playClink(Math.min(1, speed / 12));
           break;
         }
       }
@@ -478,8 +489,8 @@ function setupCollisionSound() {
   });
 }
 
-/* ---------- Clean ring drawing (solid line with real gap) ---------- */
-function drawArenaOverlay() {
+/* ---------------- DRAW SOLID RING WITH GAP ---------------- */
+function drawOverlay(){
   Events.on(render, "afterRender", () => {
     const ctx = render.context;
 
@@ -488,102 +499,38 @@ function drawArenaOverlay() {
 
     ctx.save();
 
-    // main solid ring
-    ctx.lineWidth = 10;
-    ctx.strokeStyle = "rgba(120,170,255,0.55)";
+    // ring line (solid, clean)
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = "rgba(10,18,34,0.60)";
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI * 2, false);
+    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI*2, false);
     ctx.stroke();
 
-    // subtle inner highlight
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    // subtle highlight
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(255,255,255,0.15)";
     ctx.beginPath();
-    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI * 2, false);
+    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI*2, false);
     ctx.stroke();
 
-    // divider line for "pile zone"
+    // pit separator line (visual guide)
     ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.strokeStyle = "rgba(10,18,34,0.18)";
     ctx.beginPath();
-    ctx.moveTo(0, ringCenter.y + ringRadius + 60);
-    ctx.lineTo(W, ringCenter.y + ringRadius + 60);
+    ctx.moveTo(0, H * PIT_KEEP_Y_FRAC);
+    ctx.lineTo(W, H * PIT_KEEP_Y_FRAC);
     ctx.stroke();
 
     ctx.restore();
   });
 }
 
-/* ---------- Round control ---------- */
-function cancelNextTimer() {
-  if (nextRoundTimer) {
-    clearInterval(nextRoundTimer);
-    nextRoundTimer = null;
-  }
-}
-
-function scheduleNextRound() {
-  cancelNextTimer();
-  let t = 3;
-  winnerSub.textContent = `Next round in ${t}…`;
-
-  nextRoundTimer = setInterval(() => {
-    t -= 1;
-    if (t <= 0) {
-      cancelNextTimer();
-      nextRound();
-    } else {
-      winnerSub.textContent = `Next round in ${t}…`;
-    }
-  }, 1000);
-}
-
-function nextRound() {
-  hideWinner();
-  roundNumber += 1;
-  setCounts();
-
-  ringAngle = 0;
-  buildRingWithMouth();
-  spawnFlags();
-
-  // auto-start
-  startGame();
-}
-
-function resetAll(resetScores = false) {
-  hideWinner();
-  cancelNextTimer();
-
-  if (resetScores) {
-    for (const k of Object.keys(wins)) delete wins[k];
-    renderTop5();
-    roundNumber = 1;
-  }
-
-  started = false;
-  ringAngle = 0;
-
-  buildScreenWalls();
-  buildRingWithMouth();
-  spawnFlags();
-
-  setCounts();
-}
-
-/* ---------- Start ---------- */
-function startGame() {
-  ensureAudio();
-  started = true;
-  startVelocities();
-}
-
-/* ---------- Init ---------- */
-function init() {
+/* ---------------- INIT ---------------- */
+function init(){
   engine = Engine.create();
-  engine.enableSleeping = false;   // IMPORTANT: prevents bodies from sleeping
-  engine.gravity.y = 0;            // IMPORTANT: no global gravity (we manually drop eliminated)
+  engine.enableSleeping = false; // never sleep = never stop
+  engine.gravity.y = 0;          // no global gravity (we manage pit falling)
 
   render = Render.create({
     canvas,
@@ -592,7 +539,7 @@ function init() {
       width: canvas.width,
       height: canvas.height,
       wireframes: false,
-      background: "#0b1220",
+      background: "transparent",  // let CSS background show
       pixelRatio: 1
     },
   });
@@ -607,58 +554,46 @@ function init() {
   spawnFlags();
 
   setupCollisionSound();
-  drawArenaOverlay();
+  drawOverlay();
   renderTop5();
   setCounts();
 
   Events.on(engine, "beforeUpdate", () => {
     updateRingRotation();
 
-    if (started) {
+    if (running){
       checkEliminations();
       keepFlagsMoving();
       ringKick();
     }
 
-    applyOutFlagFall();
+    // eliminated pit behavior always
+    applyOutPit();
   });
 }
 
-/* ---------- Events ---------- */
 window.addEventListener("resize", () => {
   resize();
   buildScreenWalls();
   buildRingWithMouth();
 });
 
-btnStart.addEventListener("click", () => {
-  hideWinner();
-  startGame();
+/* ---------------- START (one-time) ---------------- */
+btnStartBig.addEventListener("click", () => {
+  ensureAudio();
+  startOverlay.style.display = "none";
+
+  // start the endless game
+  roundNumber = 1;
+  ringAngle = 0;
+
+  buildRingWithMouth();
+  spawnFlags();
+  startVelocities();
+
+  running = true;
+  setCounts();
 });
 
-btnReset.addEventListener("click", () => resetAll(false));
-
-btnNextRound.addEventListener("click", () => {
-  cancelNextTimer();
-  nextRound();
-});
-
-btnPlayAgain.addEventListener("click", () => resetAll(true));
-
-btnOrientation.addEventListener("click", () => {
-  const vertical = stage.classList.contains("vertical");
-  stage.classList.toggle("vertical", !vertical);
-  stage.classList.toggle("horizontal", vertical);
-
-  btnOrientation.textContent = vertical ? "Vertical" : "Horizontal";
-
-  // wait for CSS layout update then resize
-  setTimeout(() => {
-    resize();
-    buildScreenWalls();
-    buildRingWithMouth();
-  }, 0);
-});
-
-/* ---------- Go ---------- */
+/* GO */
 init();
