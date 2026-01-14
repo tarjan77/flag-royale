@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Flag Royale</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="ui">
+    <div class="row">
+      <div class="brand">🏁 Flag Royale</div>
+      <button id="btnStart">Start</button>
+      <button id="btnReset">Reset</button>
+    </div>
+    <div class="row small">
+      <div>Remaining: <span id="remaining">0</span></div>
+      <div>Eliminated: <span id="eliminated">0</span></div>
+    </div>
+  </div>
+
+  <div id="winner" class="hidden">
+    <div class="winnerCard">
+      <div id="winnerText" class="winnerText">Winner</div>
+      <button id="btnPlayAgain">Play again</button>
+    </div>
+  </div>
+
+  <canvas id="world"></canvas>
+
+  <!-- Matter.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.20.0/build/matter.min.js"></script>
+  <script src="./script.js"></script>
+</body>
+</html>
