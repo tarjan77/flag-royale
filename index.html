@@ -8,27 +8,50 @@
 </head>
 <body>
   <div id="ui">
-    <div class="row">
+    <div class="left">
       <div class="brand">🏁 Flag Royale</div>
-      <button id="btnStart">Start</button>
-      <button id="btnReset">Reset</button>
+      <div class="stats">
+        <div>Remaining: <span id="remaining">0</span></div>
+        <div>Eliminated: <span id="eliminated">0</span></div>
+        <div>Round: <span id="round">1</span></div>
+      </div>
+
+      <div class="controls">
+        <button id="btnStart">Start</button>
+        <button id="btnReset">Reset</button>
+
+        <label class="toggle">
+          <input type="checkbox" id="autoNext" checked />
+          <span>Auto next round</span>
+        </label>
+      </div>
     </div>
-    <div class="row small">
-      <div>Remaining: <span id="remaining">0</span></div>
-      <div>Eliminated: <span id="eliminated">0</span></div>
+
+    <div class="right">
+      <button id="btnOrientation" class="pcOnly">Vertical</button>
+
+      <div class="leaderboard">
+        <div class="lbTitle">🏆 Top 5 (this session)</div>
+        <ol id="top5"></ol>
+      </div>
     </div>
   </div>
 
   <div id="winner" class="hidden">
     <div class="winnerCard">
       <div id="winnerText" class="winnerText">Winner</div>
-      <button id="btnPlayAgain">Play again</button>
+      <div class="winnerSub" id="winnerSub">Next round in 3…</div>
+      <div class="winnerBtns">
+        <button id="btnNextRound">Next round</button>
+        <button id="btnPlayAgain">Reset scores</button>
+      </div>
     </div>
   </div>
 
-  <canvas id="world"></canvas>
+  <div id="stage" class="stage horizontal">
+    <canvas id="world"></canvas>
+  </div>
 
-  <!-- Matter.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/matter-js@0.20.0/build/matter.min.js"></script>
   <script src="./script.js"></script>
 </body>
