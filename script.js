@@ -516,7 +516,7 @@ function startGame() {
 /* ---------- init ---------- */
 function init() {
   engine = Engine.create();
-  engine.gravity.y = 0.55; // important: eliminated flags FALL and collect at bottom
+  engine.gravity.y = 0; // important: eliminated flags FALL and collect at bottom
 
   render = Render.create({
     canvas,
