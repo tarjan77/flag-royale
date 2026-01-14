@@ -7,49 +7,49 @@
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <div id="ui">
-    <div class="left">
-      <div class="brand">🏁 Flag Royale</div>
-      <div class="stats">
-        <div>Remaining: <span id="remaining">0</span></div>
-        <div>Eliminated: <span id="eliminated">0</span></div>
-        <div>Round: <span id="round">1</span></div>
+  <!-- HUD (top area) -->
+  <div id="hud">
+    <div class="hudLeft">
+      <div class="panel">
+        <div class="title">🏁 Flag Royale</div>
+        <div class="line">
+          <span>Remaining:</span> <b id="remaining">0</b>
+          <span class="sep">•</span>
+          <span>Eliminated:</span> <b id="eliminated">0</b>
+          <span class="sep">•</span>
+          <span>Round:</span> <b id="round">1</b>
+        </div>
       </div>
 
-      <div class="controls">
-        <button id="btnStart">Start</button>
-        <button id="btnReset">Reset</button>
-
-        <label class="toggle">
-          <input type="checkbox" id="autoNext" checked />
-          <span>Auto next round</span>
-        </label>
-      </div>
-    </div>
-
-    <div class="right">
-      <button id="btnOrientation" class="pcOnly">Vertical</button>
-
-      <div class="leaderboard">
-        <div class="lbTitle">🏆 Top 5 (this session)</div>
+      <div class="panel">
+        <div class="title">🏆 Top 5</div>
         <ol id="top5"></ol>
       </div>
     </div>
   </div>
 
-  <div id="winner" class="hidden">
-    <div class="winnerCard">
-      <div id="winnerText" class="winnerText">Winner</div>
-      <div class="winnerSub" id="winnerSub">Next round in 3…</div>
-      <div class="winnerBtns">
-        <button id="btnNextRound">Next round</button>
-        <button id="btnPlayAgain">Reset scores</button>
-      </div>
-    </div>
+  <!-- Stage -->
+  <div id="stage">
+    <canvas id="world"></canvas>
   </div>
 
-  <div id="stage" class="stage horizontal">
-    <canvas id="world"></canvas>
+  <!-- Big start overlay (only once) -->
+  <div id="startOverlay">
+    <button id="btnStartBig">Start</button>
+    <div class="hint">Tap once to enable sound</div>
+  </div>
+
+  <!-- Winner overlay (3s, shows flag + name) -->
+  <div id="winner" class="hidden">
+    <div class="winnerCard">
+      <div class="winnerRow">
+        <img id="winnerFlag" alt="Winner flag" />
+        <div>
+          <div id="winnerText" class="winnerText">Winner</div>
+          <div class="winnerSub">Next round starts automatically</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/matter-js@0.20.0/build/matter.min.js"></script>
