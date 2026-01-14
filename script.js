@@ -92,6 +92,19 @@ function flagUrl(code) {
   return `https://flagcdn.com/w80/${code}.png`;
 }
 
+function applyOutFlagFall() {
+  for (const b of allFlags) {
+    if (b._eliminated) {
+      // constant downward pull
+      Body.applyForce(b, b.position, { x: 0, y: 0.0018 });
+
+      // tiny sideways damping so it "slides down"
+      Body.setVelocity(b, { x: b.velocity.x * 0.995, y: b.velocity.y });
+    }
+  }
+}
+
+
 /* ---------- audio (no file) ---------- */
 let audioCtx = null;
 let lastSoundAt = 0;
@@ -254,7 +267,8 @@ function buildRingWithMouth() {
       isStatic: true,
       angle: a,
       label: "ring",
-      render: { fillStyle: "#203252" }
+      render: { visible: false }
+
     });
 
     wall._baseAngle = a;
@@ -314,10 +328,12 @@ function spawnFlags() {
     if (!pos) pos = randomInsideCircle(maxSpawnR);
 
     const body = Bodies.circle(pos.x, pos.y, FLAG_RADIUS, {
-      restitution: 0.9,
-      friction: 0.02,
-      frictionAir: 0.01,
-      density: 0.001,
+      restitution: 0.985,     // HIGH bounce (main fix)
+      friction: 0.001,        // low friction so it doesn't "stick"
+      frictionStatic: 0.0,
+      frictionAir: 0.002,     // low air drag
+      density: 0.0008,        // lighter so collisions react faster
+      slop: 0.0,              // tighter collisions
       label: "flag",
       render: {
         sprite: {
@@ -327,6 +343,7 @@ function spawnFlags() {
         }
       }
     });
+
 
     body._countryName = c.name;
     body._eliminated = false;
@@ -353,8 +370,8 @@ function checkEliminations() {
       b.label = "out";
 
       // make eliminated flags slide & settle nicely
-      b.restitution = 0.15;
-      b.friction = 0.15;
+      b.restitution = 0.08;
+      b.friction = 0.18;
       b.frictionAir = 0.02;
 
       eliminatedCount++;
@@ -381,14 +398,14 @@ function checkEliminations() {
 
 /* ---------- start push ---------- */
 function startPush() {
-  // random left/right energy immediately
   for (const b of activeFlags) {
-    const dirX = Math.random() < 0.5 ? -1 : 1;
-    const jitterY = (Math.random() - 0.5) * 0.4;
-    const force = { x: dirX * START_PUSH, y: jitterY * START_PUSH };
-    Body.applyForce(b, b.position, force);
+    const vx = (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 3);
+    const vy = (Math.random() - 0.5) * 1.5;
+    Body.setVelocity(b, { x: vx, y: vy });
+    Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.25);
   }
 }
+
 
 /* ---------- collisions sound ---------- */
 function setupCollisionSound() {
@@ -420,22 +437,32 @@ function drawArenaOverlay() {
   Events.on(render, "afterRender", () => {
     const ctx = render.context;
 
-    // ring outline
+    // Solid ring line with a clean gap
     ctx.save();
-    ctx.beginPath();
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // mouth highlight
-    const startA = mouthCenterAngle - mouthHalfAngle + ringAngle;
-    const endA = mouthCenterAngle + mouthHalfAngle + ringAngle;
-    ctx.beginPath();
+    
+    const gapStart = (mouthCenterAngle - mouthHalfAngle) + ringAngle;
+    const gapEnd   = (mouthCenterAngle + mouthHalfAngle) + ringAngle;
+    
     ctx.lineWidth = 10;
-    ctx.strokeStyle = "rgba(43,124,255,0.35)";
-    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, startA, endA);
+    ctx.strokeStyle = "rgba(120,170,255,0.55)";
+    ctx.lineCap = "round";
+    
+    // Draw arc 1: from gapEnd -> gapStart + 2π (this draws everything except the gap)
+    ctx.beginPath();
+    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI * 2, false);
     ctx.stroke();
+    
+    // optional subtle inner glow line
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+    ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI * 2, false);
+    ctx.stroke();
+    
+    ctx.restore();
+
+    
+    
 
     // hint "drop zone"
     ctx.beginPath();
@@ -542,6 +569,15 @@ function init() {
   setupCollisionSound();
   drawArenaOverlay();
   renderTop5();
+
+  Events.on(engine, "beforeUpdate", () => {
+    updateRingRotation();
+
+    if (started) checkEliminations();
+
+    // keep eliminated flags falling & collecting
+    applyOutFlagFall();
+  });
 
   Events.on(engine, "beforeUpdate", () => {
     updateRingRotation();
