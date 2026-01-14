@@ -1,7 +1,22 @@
+/* Flag Royale (Fixed Physics) - Matter.js
+   ✅ Solid ring drawn with a clear mouth gap (10% random each round)
+   ✅ Invisible ring colliders for physics
+   ✅ Flags bounce/reflect strongly and NEVER stop moving after Start
+   ✅ Escaped flags are "eliminated" from the competition but stay on screen
+      and slide/fall to bottom (without global gravity)
+   ✅ Screen edges are walls (nothing leaves the screen)
+   ✅ PC toggle: Vertical / Horizontal stage
+   ✅ Top-5 wins scoreboard (session-only, resets on reload)
+   ✅ Random mouth + random spawn each round
+   ✅ Start gives immediate random velocity to all flags
+   ✅ Auto next round option and countdown overlay
+*/
+
 const {
   Engine, Render, Runner, World, Bodies, Body, Events, Vector
 } = Matter;
 
+/* ---------- DOM ---------- */
 const canvas = document.getElementById("world");
 const stage = document.getElementById("stage");
 
@@ -22,16 +37,32 @@ const autoNext = document.getElementById("autoNext");
 const btnOrientation = document.getElementById("btnOrientation");
 
 /* ---------- CONFIG ---------- */
-const FLAG_RADIUS = 16;            // physics radius
-const FLAG_SPRITE_SIZE = 34;       // display size
+const FLAG_RADIUS = 16;
+const FLAG_SPRITE_SIZE = 34;
+
 const WALL_THICKNESS = 18;
-const RING_SEGMENTS = 84;          // smoother ring
-const MOUTH_FRACTION = 0.10;       // 10% gap
-const ROTATION_SPEED = 0.010;      // rad/tick
-const OUT_MARGIN = 26;
-const START_PUSH = 0.020;          // initial force
-const COLLISION_THRESHOLD = 2.0;
-const SOUND_COOLDOWN_MS = 60;
+const RING_SEGMENTS = 92;
+
+const MOUTH_FRACTION = 0.10;      // 10% gap
+const ROTATION_SPEED = 0.010;     // rad/tick
+
+const OUT_MARGIN = 26;            // when outside ring => eliminated
+const START_VEL_MIN = 3.2;        // initial velocity range
+const START_VEL_MAX = 6.2;
+
+const COLLISION_THRESHOLD = 1.8;  // sound trigger threshold
+const SOUND_COOLDOWN_MS = 55;
+
+/* “Never stop moving” tuning */
+const MIN_SPEED = 2.2;
+const MAX_SPEED = 11.0;
+
+/* Extra energy injection near ring boundary */
+const RING_KICK_BAND = 28;
+const RING_KICK_FORCE = 0.00035;
+
+/* Out flags falling/settling */
+const OUT_FALL_FORCE = 0.0018;
 
 /* ---------- FLAGS (193 UN members) ---------- */
 const COUNTRIES = [
@@ -87,25 +118,12 @@ const COUNTRIES = [
   { name: "Zambia", code: "zm" },{ name: "Zimbabwe", code: "zw" }
 ];
 
-/* ---------- helpers ---------- */
+/* ---------- URL helper ---------- */
 function flagUrl(code) {
   return `https://flagcdn.com/w80/${code}.png`;
 }
 
-function applyOutFlagFall() {
-  for (const b of allFlags) {
-    if (b._eliminated) {
-      // constant downward pull
-      Body.applyForce(b, b.position, { x: 0, y: 0.0018 });
-
-      // tiny sideways damping so it "slides down"
-      Body.setVelocity(b, { x: b.velocity.x * 0.995, y: b.velocity.y });
-    }
-  }
-}
-
-
-/* ---------- audio (no file) ---------- */
+/* ---------- Audio (no files) ---------- */
 let audioCtx = null;
 let lastSoundAt = 0;
 function ensureAudio() {
@@ -135,68 +153,67 @@ function playClink(intensity = 0.5) {
   osc.stop(now + 0.08);
 }
 
-/* ---------- world state ---------- */
+/* ---------- World state ---------- */
 let engine, runner, render;
 let W = 0, H = 0, dpr = 1;
 
 let ringCenter = { x: 0, y: 0 };
 let ringRadius = 0;
 let ringAngle = 0;
+
 let mouthCenterAngle = 0;
 let mouthHalfAngle = 0;
 
 let ringSegments = [];
 let walls = [];
-let allFlags = [];       // all bodies (including eliminated)
-let activeFlags = [];    // still in the ring competition
+
+let allFlags = [];
+let activeFlags = [];
 
 let eliminatedCount = 0;
 let roundNumber = 1;
 let started = false;
+
 let nextRoundTimer = null;
+const wins = {}; // session-only
 
-const wins = {}; // session wins per country
-
+/* ---------- UI ---------- */
 function setCounts() {
   remainingEl.textContent = String(activeFlags.length);
   eliminatedEl.textContent = String(eliminatedCount);
   roundEl.textContent = String(roundNumber);
 }
-
 function renderTop5() {
   const entries = Object.entries(wins).sort((a,b)=>b[1]-a[1]).slice(0,5);
   top5El.innerHTML = "";
+  if (entries.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "No wins yet";
+    top5El.appendChild(li);
+    return;
+  }
   for (const [name, score] of entries) {
     const li = document.createElement("li");
     li.textContent = `${name} — ${score}`;
     top5El.appendChild(li);
   }
-  if (entries.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "No wins yet";
-    top5El.appendChild(li);
-  }
 }
-
 function showWinner(name) {
   winnerText.textContent = `${name} wins!`;
   winnerOverlay.classList.remove("hidden");
 }
-
 function hideWinner() {
   winnerOverlay.classList.add("hidden");
 }
 
-/* ---------- sizing ---------- */
+/* ---------- Sizing ---------- */
 function getCanvasTargetRect() {
-  // We read the displayed canvas size from CSS (stage modes)
-  const rect = canvas.getBoundingClientRect();
-  return rect;
+  return canvas.getBoundingClientRect();
 }
-
 function resize() {
   dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   const rect = getCanvasTargetRect();
+
   W = Math.max(1, Math.floor(rect.width * dpr));
   H = Math.max(1, Math.floor(rect.height * dpr));
 
@@ -210,44 +227,48 @@ function resize() {
     render.canvas.height = H;
   }
 
-  // ring sits in upper portion so escape -> drop to bottom
+  // ring slightly above center, so escaped flags pile at bottom area
   ringCenter = { x: W / 2, y: H * 0.42 };
   ringRadius = Math.min(W, H) * 0.34;
 }
 
-/* ---------- build boundaries ---------- */
+/* ---------- Helpers ---------- */
 function clearBodies(list) {
   for (const b of list) World.remove(engine.world, b);
   list.length = 0;
 }
-
-function buildScreenWalls() {
-  clearBodies(walls);
-  const t = 40;
-  const opts = { isStatic: true, render: { visible: false } };
-
-  const top = Bodies.rectangle(W/2, -t/2, W+2*t, t, opts);
-  const bottom = Bodies.rectangle(W/2, H + t/2, W+2*t, t, opts);
-  const left = Bodies.rectangle(-t/2, H/2, t, H+2*t, opts);
-  const right = Bodies.rectangle(W + t/2, H/2, t, H+2*t, opts);
-
-  walls.push(top, bottom, left, right);
-  World.add(engine.world, walls);
-}
-
 function angleDiff(a, b) {
-  // smallest signed diff
   let d = a - b;
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return d;
 }
+function randomInsideCircle(maxR) {
+  const t = Math.random() * Math.PI * 2;
+  const u = Math.random() + Math.random();
+  const rr = (u > 1 ? 2 - u : u) * maxR;
+  return { x: ringCenter.x + Math.cos(t) * rr, y: ringCenter.y + Math.sin(t) * rr };
+}
 
+/* ---------- Screen walls (keep everything on screen) ---------- */
+function buildScreenWalls() {
+  clearBodies(walls);
+  const t = 40;
+  const opts = { isStatic: true, render: { visible: false } };
+  const top = Bodies.rectangle(W/2, -t/2, W+2*t, t, opts);
+  const bottom = Bodies.rectangle(W/2, H + t/2, W+2*t, t, opts);
+  const left = Bodies.rectangle(-t/2, H/2, t, H+2*t, opts);
+  const right = Bodies.rectangle(W + t/2, H/2, t, H+2*t, opts);
+  walls.push(top, bottom, left, right);
+  World.add(engine.world, walls);
+}
+
+/* ---------- Ring with mouth gap (physics segments invisible) ---------- */
 function buildRingWithMouth() {
   clearBodies(ringSegments);
 
-  mouthHalfAngle = (Math.PI * 2) * (MOUTH_FRACTION / 2); // half-gap
-  mouthCenterAngle = Math.random() * Math.PI * 2;        // random each round
+  mouthHalfAngle = (Math.PI * 2) * (MOUTH_FRACTION / 2);
+  mouthCenterAngle = Math.random() * Math.PI * 2;
 
   const segCount = RING_SEGMENTS;
   const r = ringRadius;
@@ -255,20 +276,19 @@ function buildRingWithMouth() {
 
   for (let i = 0; i < segCount; i++) {
     const a = (i / segCount) * Math.PI * 2;
-    // skip segments inside mouth window
+
+    // skip the mouth opening
     if (Math.abs(angleDiff(a, mouthCenterAngle)) < mouthHalfAngle) continue;
 
     const x = ringCenter.x + Math.cos(a) * r;
     const y = ringCenter.y + Math.sin(a) * r;
-
     const segLen = (2 * Math.PI * r) / segCount + 2;
 
     const wall = Bodies.rectangle(x, y, segLen, thickness, {
       isStatic: true,
       angle: a,
       label: "ring",
-      render: { visible: false }
-
+      render: { visible: false } // IMPORTANT: ring is drawn manually
     });
 
     wall._baseAngle = a;
@@ -291,16 +311,9 @@ function updateRingRotation() {
   }
 }
 
-/* ---------- flags ---------- */
-function randomInsideCircle(maxR) {
-  const t = Math.random() * Math.PI * 2;
-  const u = Math.random() + Math.random();
-  const rr = (u > 1 ? 2 - u : u) * maxR;
-  return { x: ringCenter.x + Math.cos(t) * rr, y: ringCenter.y + Math.sin(t) * rr };
-}
-
+/* ---------- Spawn flags ---------- */
 function spawnFlags() {
-  // remove old flags
+  // remove old
   for (const f of allFlags) World.remove(engine.world, f);
   allFlags = [];
   activeFlags = [];
@@ -311,29 +324,25 @@ function spawnFlags() {
   for (const c of COUNTRIES) {
     let pos = null;
 
-    for (let tries = 0; tries < 90; tries++) {
+    for (let tries = 0; tries < 120; tries++) {
       const p = randomInsideCircle(maxSpawnR);
 
-      // don’t spawn too close to mouth direction
+      // avoid spawning right near the mouth direction
       const ang = Math.atan2(p.y - ringCenter.y, p.x - ringCenter.x);
-      if (Math.abs(angleDiff(ang, mouthCenterAngle)) < mouthHalfAngle * 1.6) continue;
+      if (Math.abs(angleDiff(ang, mouthCenterAngle)) < mouthHalfAngle * 1.7) continue;
 
-      const ok = activeFlags.every(b => {
-        const dx = b.position.x - p.x;
-        const dy = b.position.y - p.y;
-        return Math.hypot(dx, dy) > FLAG_RADIUS * 2.0;
-      });
+      // avoid overlaps
+      const ok = activeFlags.every(b => Math.hypot(b.position.x - p.x, b.position.y - p.y) > FLAG_RADIUS * 2.0);
       if (ok) { pos = p; break; }
     }
     if (!pos) pos = randomInsideCircle(maxSpawnR);
 
     const body = Bodies.circle(pos.x, pos.y, FLAG_RADIUS, {
-      restitution: 0.985,     // HIGH bounce (main fix)
-      friction: 0.001,        // low friction so it doesn't "stick"
-      frictionStatic: 0.0,
-      frictionAir: 0.002,     // low air drag
-      density: 0.0008,        // lighter so collisions react faster
-      slop: 0.0,              // tighter collisions
+      restitution: 1.02,      // slightly >1 to compensate tiny losses
+      friction: 0,
+      frictionStatic: 0,
+      frictionAir: 0,         // NO DRAG
+      slop: 0,
       label: "flag",
       render: {
         sprite: {
@@ -344,10 +353,8 @@ function spawnFlags() {
       }
     });
 
-
     body._countryName = c.name;
     body._eliminated = false;
-    body._lastHitAt = 0;
 
     allFlags.push(body);
     activeFlags.push(body);
@@ -357,7 +364,48 @@ function spawnFlags() {
   setCounts();
 }
 
-/* ---------- elimination logic ---------- */
+/* ---------- Start motion (instant chaos) ---------- */
+function startVelocities() {
+  for (const b of activeFlags) {
+    const a = Math.random() * Math.PI * 2;
+    const s = START_VEL_MIN + Math.random() * (START_VEL_MAX - START_VEL_MIN);
+    Body.setVelocity(b, { x: Math.cos(a) * s, y: Math.sin(a) * s });
+    Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.25);
+  }
+}
+
+/* ---------- Keep flags moving forever (main fix) ---------- */
+function keepFlagsMoving() {
+  for (const b of activeFlags) {
+    const v = b.velocity;
+    const speed = Math.hypot(v.x, v.y);
+
+    if (speed < MIN_SPEED) {
+      const a = Math.random() * Math.PI * 2;
+      Body.setVelocity(b, { x: Math.cos(a) * MIN_SPEED, y: Math.sin(a) * MIN_SPEED });
+    } else if (speed > MAX_SPEED) {
+      const scale = MAX_SPEED / speed;
+      Body.setVelocity(b, { x: v.x * scale, y: v.y * scale });
+    }
+  }
+}
+
+/* Inject extra energy near ring boundary */
+function ringKick() {
+  for (const b of activeFlags) {
+    const dx = b.position.x - ringCenter.x;
+    const dy = b.position.y - ringCenter.y;
+    const d = Math.hypot(dx, dy) || 1;
+
+    if (Math.abs(d - ringRadius) < RING_KICK_BAND) {
+      const tx = -dy / d;
+      const ty = dx / d;
+      Body.applyForce(b, b.position, { x: tx * RING_KICK_FORCE, y: ty * RING_KICK_FORCE });
+    }
+  }
+}
+
+/* ---------- Elimination (out of ring) ---------- */
 function checkEliminations() {
   const limit = ringRadius + OUT_MARGIN;
 
@@ -369,10 +417,10 @@ function checkEliminations() {
       b._eliminated = true;
       b.label = "out";
 
-      // make eliminated flags slide & settle nicely
+      // settle out flags
       b.restitution = 0.08;
-      b.friction = 0.18;
-      b.frictionAir = 0.02;
+      b.friction = 0.20;
+      b.frictionAir = 0.03;
 
       eliminatedCount++;
     }
@@ -396,22 +444,20 @@ function checkEliminations() {
   }
 }
 
-/* ---------- start push ---------- */
-function startPush() {
-  for (const b of activeFlags) {
-    const vx = (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() * 3);
-    const vy = (Math.random() - 0.5) * 1.5;
-    Body.setVelocity(b, { x: vx, y: vy });
-    Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.25);
+/* ---------- Out flags fall/collect at bottom (no global gravity) ---------- */
+function applyOutFlagFall() {
+  for (const b of allFlags) {
+    if (b._eliminated) {
+      Body.applyForce(b, b.position, { x: 0, y: OUT_FALL_FORCE });
+      Body.setVelocity(b, { x: b.velocity.x * 0.995, y: b.velocity.y });
+    }
   }
 }
 
-
-/* ---------- collisions sound ---------- */
+/* ---------- Collision sound ---------- */
 function setupCollisionSound() {
   Events.on(engine, "collisionStart", (evt) => {
-    if (!started) return;
-    if (!audioCtx) return;
+    if (!started || !audioCtx) return;
 
     const nowMs = performance.now();
     if (nowMs - lastSoundAt < SOUND_COOLDOWN_MS) return;
@@ -432,42 +478,35 @@ function setupCollisionSound() {
   });
 }
 
-/* ---------- visuals ---------- */
+/* ---------- Clean ring drawing (solid line with real gap) ---------- */
 function drawArenaOverlay() {
   Events.on(render, "afterRender", () => {
     const ctx = render.context;
 
-    // Solid ring line with a clean gap
-    ctx.save();
-    
     const gapStart = (mouthCenterAngle - mouthHalfAngle) + ringAngle;
     const gapEnd   = (mouthCenterAngle + mouthHalfAngle) + ringAngle;
-    
+
+    ctx.save();
+
+    // main solid ring
     ctx.lineWidth = 10;
     ctx.strokeStyle = "rgba(120,170,255,0.55)";
     ctx.lineCap = "round";
-    
-    // Draw arc 1: from gapEnd -> gapStart + 2π (this draws everything except the gap)
     ctx.beginPath();
     ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI * 2, false);
     ctx.stroke();
-    
-    // optional subtle inner glow line
+
+    // subtle inner highlight
     ctx.lineWidth = 3;
     ctx.strokeStyle = "rgba(255,255,255,0.10)";
     ctx.beginPath();
     ctx.arc(ringCenter.x, ringCenter.y, ringRadius, gapEnd, gapStart + Math.PI * 2, false);
     ctx.stroke();
-    
-    ctx.restore();
 
-    
-    
-
-    // hint "drop zone"
-    ctx.beginPath();
+    // divider line for "pile zone"
     ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.beginPath();
     ctx.moveTo(0, ringCenter.y + ringRadius + 60);
     ctx.lineTo(W, ringCenter.y + ringRadius + 60);
     ctx.stroke();
@@ -476,7 +515,7 @@ function drawArenaOverlay() {
   });
 }
 
-/* ---------- round control ---------- */
+/* ---------- Round control ---------- */
 function cancelNextTimer() {
   if (nextRoundTimer) {
     clearInterval(nextRoundTimer);
@@ -509,7 +548,7 @@ function nextRound() {
   buildRingWithMouth();
   spawnFlags();
 
-  // start automatically (no clicking)
+  // auto-start
   startGame();
 }
 
@@ -533,17 +572,18 @@ function resetAll(resetScores = false) {
   setCounts();
 }
 
-/* ---------- start/stop ---------- */
+/* ---------- Start ---------- */
 function startGame() {
   ensureAudio();
   started = true;
-  startPush();
+  startVelocities();
 }
 
-/* ---------- init ---------- */
+/* ---------- Init ---------- */
 function init() {
   engine = Engine.create();
-  engine.gravity.y = 0; // important: eliminated flags FALL and collect at bottom
+  engine.enableSleeping = false;   // IMPORTANT: prevents bodies from sleeping
+  engine.gravity.y = 0;            // IMPORTANT: no global gravity (we manually drop eliminated)
 
   render = Render.create({
     canvas,
@@ -569,26 +609,23 @@ function init() {
   setupCollisionSound();
   drawArenaOverlay();
   renderTop5();
+  setCounts();
 
   Events.on(engine, "beforeUpdate", () => {
     updateRingRotation();
 
-    if (started) checkEliminations();
+    if (started) {
+      checkEliminations();
+      keepFlagsMoving();
+      ringKick();
+    }
 
-    // keep eliminated flags falling & collecting
     applyOutFlagFall();
   });
-
-  Events.on(engine, "beforeUpdate", () => {
-    updateRingRotation();
-    if (started) checkEliminations();
-  });
-
-  setCounts();
 }
 
+/* ---------- Events ---------- */
 window.addEventListener("resize", () => {
-  // keep stage sizing accurate, then rebuild boundaries
   resize();
   buildScreenWalls();
   buildRingWithMouth();
@@ -600,21 +637,22 @@ btnStart.addEventListener("click", () => {
 });
 
 btnReset.addEventListener("click", () => resetAll(false));
+
 btnNextRound.addEventListener("click", () => {
   cancelNextTimer();
   nextRound();
 });
+
 btnPlayAgain.addEventListener("click", () => resetAll(true));
 
 btnOrientation.addEventListener("click", () => {
-  // toggle stage mode
   const vertical = stage.classList.contains("vertical");
   stage.classList.toggle("vertical", !vertical);
   stage.classList.toggle("horizontal", vertical);
 
   btnOrientation.textContent = vertical ? "Vertical" : "Horizontal";
 
-  // Important: update canvas size based on new CSS size
+  // wait for CSS layout update then resize
   setTimeout(() => {
     resize();
     buildScreenWalls();
@@ -622,5 +660,5 @@ btnOrientation.addEventListener("click", () => {
   }, 0);
 });
 
-// Start
+/* ---------- Go ---------- */
 init();
